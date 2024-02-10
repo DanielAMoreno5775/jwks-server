@@ -12,8 +12,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,6 +26,10 @@ import (
 
 	"github.com/golang-jwt/jwt"
 )
+
+// create global variables to store the RSA key modulus and exponent
+var modulusBytes string
+var privateExponentBytes string
 
 // structure to store JSON text from the file
 type JSONWrapper struct {
@@ -166,7 +171,7 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//read the file
-	byteResult, _ := ioutil.ReadAll(fileContent)
+	byteResult, _ := io.ReadAll(fileContent)
 
 	//close the file
 	defer func() {
@@ -188,28 +193,6 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 			foundIndex = i
 		}
 	}
-
-	//if that kid wasn't found, print error message
-	/*if foundIndex == -1 {
-		fmt.Println("Not found")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	} else if strconv.Atoi(keys.Keys[foundIndex].Exp) <= time.Now().Unix() {
-		fmt.Println("Expired")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	} else {
-		//assemble the data from the identified key
-		jsonJWK := fmt.Sprintf("{\"kid\":\"%s\", \"alg\": \"%s\", \"kty\": \"%s\", \"use\": \"%s\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%s\"}", keys.Keys[foundIndex].Kid, keys.Keys[foundIndex].Alg, keys.Keys[foundIndex].Kty, keys.Keys[foundIndex].Use, keys.Keys[foundIndex].N, keys.Keys[foundIndex].E, keys.Keys[foundIndex].Exp)
-		//prettify the JSON before printing it
-		prettyJSON, err := prettyprint([]byte(jsonJWK))
-		if err != nil {
-			fmt.Println("Prettify error in kidJWK")
-			return
-		}
-		prettyJSONStr := string(prettyJSON)
-		fmt.Fprintf(w, "%s\n", prettyJSONStr)
-	}*/
 
 	//if that kid wasn't found, print error message
 	if foundIndex == -1 {
@@ -350,17 +333,18 @@ func jwksPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//read the file
-	byteResult, _ := ioutil.ReadAll(fileContent)
+	byteResult, _ := io.ReadAll(fileContent)
 
 	//create a variable to store the JSON from the file
 	var keys JSONWrapper
 	//store the file's contents in the keys variable for standard JSON format
 	json.Unmarshal(byteResult, &keys)
 
-	//parsedClaims := ParseToken("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InJhbmRvbSB1c2VyIG5hbWUiLCJleHAiOjE3MDcyNTUxNzUsImlhdCI6MTcwNzI1NTE3NSwiaXNzIjoibXkgd2Vic2l0ZSBuYW1lIGhlcmUifQ.2_RYleRvteJpU2I3ugWALmaT1Mle79eZ14rGVophGq4DkrkqfoBCpx16eInzrpdlI7kxfyx4yGhc634etfjd83dBMS51OyWMOMwXIu0PsxJlojFEpt_sikcyRWciG2gjC2-oeCcnoTS8h5Dy3wqqJECPEaprtPmi3AlikOhNg9bbjbgiXFLgj6c5k4P60E3NCKQ24lPmLm3HkTnPAHxM35tyzGpGKhNXJGtPCcnqhfkeRv9mzFxn4KRJzzuda68YlbpWUEYCy9ef4az7RAFWWgpinj4Fg407oYou0YRaP1VVR2nVCcbahsM0h3YufxfYfEkdl5_ym1BsohEH_qNrnA")
-	//jsonClaims := fmt.Sprintf("{ \"username\": \"%s\", \"exp\": %d, \"iat\": %d, \"iss\": \"%s\"}", parsedClaims.Username, parsedClaims.StandardClaims.ExpiresAt, parsedClaims.StandardClaims.IssuedAt, parsedClaims.StandardClaims.Issuer)
-	//prettyJSON, _ := prettyprint([]byte(jsonClaims))
-	//fmt.Fprintf(w, "%s", prettyJSON)
+	/*//example code on how to parse out claims from a JWT; unnecessary for Project 1 but may be useful for later
+	parsedClaims := ParseToken("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InJhbmRvbSB1c2VyIG5hbWUiLCJleHAiOjE3MDcyNTUxNzUsImlhdCI6MTcwNzI1NTE3NSwiaXNzIjoibXkgd2Vic2l0ZSBuYW1lIGhlcmUifQ.2_RYleRvteJpU2I3ugWALmaT1Mle79eZ14rGVophGq4DkrkqfoBCpx16eInzrpdlI7kxfyx4yGhc634etfjd83dBMS51OyWMOMwXIu0PsxJlojFEpt_sikcyRWciG2gjC2-oeCcnoTS8h5Dy3wqqJECPEaprtPmi3AlikOhNg9bbjbgiXFLgj6c5k4P60E3NCKQ24lPmLm3HkTnPAHxM35tyzGpGKhNXJGtPCcnqhfkeRv9mzFxn4KRJzzuda68YlbpWUEYCy9ef4az7RAFWWgpinj4Fg407oYou0YRaP1VVR2nVCcbahsM0h3YufxfYfEkdl5_ym1BsohEH_qNrnA")
+	jsonClaims := fmt.Sprintf("{ \"username\": \"%s\", \"exp\": %d, \"iat\": %d, \"iss\": \"%s\"}", parsedClaims.Username, parsedClaims.StandardClaims.ExpiresAt, parsedClaims.StandardClaims.IssuedAt, parsedClaims.StandardClaims.Issuer)
+	prettyJSON, _ := prettyprint([]byte(jsonClaims))
+	fmt.Fprintf(w, "%s", prettyJSON)*/
 
 	var jsonJWK string
 	jsonJWK = "{\"keys\": ["
@@ -402,13 +386,13 @@ func base64Encode(input []byte) []byte {
 
 // this function returns either an error or a signed JWSON Web Token
 // if expTime is negative, then token has expired; otherwise, it will expire in passed hours
+// creates a new RSA key that will be used for this token
 func generateJWT(expTime int) (string, error) {
-	//create a new RSA key that will be used for this token
 	//store the size of the RSA key
 	bitSize := 2048
 
 	//generate an RSA key and handle any errors
-	key, _ = rsa.GenerateKey(rand.Reader, bitSize)
+	key, _ := rsa.GenerateKey(rand.Reader, bitSize)
 
 	//try to extract the modulus
 	modulusBytes = base64.StdEncoding.EncodeToString(key.N.Bytes())
@@ -423,21 +407,10 @@ func generateJWT(expTime int) (string, error) {
 	privateExponentBytes = "AQAB"
 
 	//extract the public key
-	pub = key.Public()
-
-	//get the private key bytes after marshalling it according to the X.509 standard
-	privateKeyBytes = x509.MarshalPKCS1PrivateKey(key)
-
-	// Encode private key to PKCS#1 ASN.1 PEM.
-	keyPEM = pem.EncodeToMemory(
-		&pem.Block{
-			Type:  "RSA PRIVATE KEY",
-			Bytes: privateKeyBytes,
-		},
-	)
+	pub := key.Public()
 
 	// Encode public key to PKCS#1 ASN.1 PEM.
-	pubPEM = pem.EncodeToMemory(
+	pubPEM := pem.EncodeToMemory(
 		&pem.Block{
 			Type:  "RSA PUBLIC KEY",
 			Bytes: x509.MarshalPKCS1PublicKey(pub.(*rsa.PublicKey)),
@@ -493,6 +466,7 @@ func generateJWT(expTime int) (string, error) {
 }
 
 // retrieve claims from the passedToken
+// unneeded for Project 1 but included in case it is needed for later
 func ParseToken(passedToken string) *customClaims {
 	parsedToken, _ := jwt.ParseWithClaims(passedToken, &customClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
@@ -502,4 +476,10 @@ func ParseToken(passedToken string) *customClaims {
 	})
 
 	return parsedToken.Claims.(*customClaims)
+}
+
+// returns a boolean value whether a file exists
+func checkFileExists(filePath string) bool {
+	_, error := os.Stat(filePath)
+	return !errors.Is(error, os.ErrNotExist)
 }

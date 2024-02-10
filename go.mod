@@ -1,4 +1,4 @@
-module github.com/lestrrat-go/jwx
+module github.com/DanielAMoreno5775/jwks-server
 
 go 1.14
 
