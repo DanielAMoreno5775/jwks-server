@@ -1,37 +1,62 @@
-// Test various ways to do HTTP method+path routing in Go
-
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"sync"
+	"time"
 )
 
 // set global constant for the port number
-const port = 8080
+const port = ":8080"
 
-func main() {
-	//if the file doesn't exist, create it
-	if !(checkFileExists("./.well-known/jwks.json")) {
-		f, _ := os.OpenFile("./.well-known/jwks.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+func main() { mainActual(os.Stdout, Serve, 360000) }
 
-		//insert into file the basic key set format
-		fmt.Fprint(f, "{\n\t\"keys\": [\n\n\t]\n}")
+// takes a writer (stdout normally), a HTTP handler function (Serve normally), and the number of seconds to serve it (100 hours)
+func mainActual(w io.Writer, h http.HandlerFunc, timeServed int64) {
+	httpServerExitDone := &sync.WaitGroup{}
 
-		//close the file
-		defer func() {
-			if err := f.Close(); err != nil {
-				fmt.Printf("failed to close file: %v", err)
-			}
-		}()
+	httpServerExitDone.Add(1)
+	srv := startHttpServer(httpServerExitDone, h)
+
+	fmt.Fprintf(w, "Server listening on port %s\n", port)
+
+	time.Sleep(time.Duration(timeServed) * time.Second)
+
+	fmt.Fprintf(w, "HTTP server shutting down\n")
+
+	// now shutdown the server gracefully
+	if err := srv.Shutdown(context.TODO()); err != nil {
+		panic(err) // failure/timeout shutting down the server gracefully
 	}
 
-	//get the page
-	router := http.HandlerFunc(Serve)
+	// wait for goroutine started in startHttpServer() to stop
+	httpServerExitDone.Wait()
 
-	//write in console that the program is ready and listening
-	fmt.Printf("listening on port %d\n", port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), router))
+	fmt.Fprintf(w, "HTTP server exited\n")
+}
+
+func startHttpServer(wg *sync.WaitGroup, h http.HandlerFunc) *http.Server {
+	srv := &http.Server{Addr: port}
+
+	//calls the handler function
+	http.HandleFunc("/", h)
+
+	go func() {
+		// let main know clean up is finished
+		defer wg.Done()
+
+		// always returns error. ErrServerClosed on graceful close
+		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			// unexpected error. port in use?
+			log.Fatalf("ListenAndServe(): %v", err)
+		}
+	}()
+
+	// returning reference so caller can call Shutdown()
+	return srv
 }

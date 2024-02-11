@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -34,13 +33,13 @@ var privateExponentBytes string
 // structure to store JSON text from the file
 type JSONWrapper struct {
 	Keys []struct {
-		Kty string `json:"kty"`
-		N   string `json:"n"`
-		E   string `json:"e"`
-		Kid string `json:"kid"`
-		Alg string `json:"alg"`
-		Use string `json:"use"`
-		Exp string `json:"exp"`
+		Kty string `json:"Kty"`
+		N   string `json:"N"`
+		E   string `json:"E"`
+		Kid string `json:"Kid"`
+		Alg string `json:"Alg"`
+		Use string `json:"Use"`
+		Exp string `json:"Exp"`
 	}
 }
 
@@ -211,7 +210,7 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 
 			//assemble the data from the identified key
-			jsonJWK := fmt.Sprintf("{\"kid\":\"%s\", \"alg\": \"%s\", \"kty\": \"%s\", \"use\": \"%s\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%s\"}", keys.Keys[foundIndex].Kid, keys.Keys[foundIndex].Alg, keys.Keys[foundIndex].Kty, keys.Keys[foundIndex].Use, keys.Keys[foundIndex].N, keys.Keys[foundIndex].E, keys.Keys[foundIndex].Exp)
+			jsonJWK := fmt.Sprintf("{\"Kid\":\"%s\", \"Alg\": \"%s\", \"Kty\": \"%s\", \"Use\": \"%s\", \"N\":\"%s\", \"E\":\"%s\", \"Exp\":\"%s\"}", keys.Keys[foundIndex].Kid, keys.Keys[foundIndex].Alg, keys.Keys[foundIndex].Kty, keys.Keys[foundIndex].Use, keys.Keys[foundIndex].N, keys.Keys[foundIndex].E, keys.Keys[foundIndex].Exp)
 			//prettify the JSON before printing it
 			prettyJSON, err := prettyprint([]byte(jsonJWK))
 			if err != nil {
@@ -300,6 +299,10 @@ func auth(w http.ResponseWriter, r *http.Request) {
 		//get rid of everything in file currently
 		f, err := os.OpenFile("./.well-known/jwks.json", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
 
+		if err != nil {
+			return
+		}
+
 		//insert into file the altered version of the original contents + the pretty JWK JSON
 		fmt.Fprintf(f, "%s%s\n\t]\n}", fileStrTrimmed, prettyJSONStr)
 
@@ -364,24 +367,6 @@ func jwksPage(w http.ResponseWriter, r *http.Request) {
 
 	prettyJSONStr := string(prettyJSON)
 	fmt.Fprintf(w, "%s\n", prettyJSONStr)
-}
-
-// takes hex and outputs binary bytes
-func decodeHex(input []byte) ([]byte, error) {
-	db := make([]byte, hex.DecodedLen(len(input)))
-	_, err := hex.Decode(db, input)
-	if err != nil {
-		return nil, err
-	}
-	return db, nil
-}
-
-// encode text passed as byte array in base64
-func base64Encode(input []byte) []byte {
-	eb := make([]byte, base64.StdEncoding.EncodedLen(len(input)))
-	base64.StdEncoding.Encode(eb, input)
-
-	return eb
 }
 
 // this function returns either an error or a signed JWSON Web Token
@@ -467,15 +452,15 @@ func generateJWT(expTime int) (string, error) {
 
 // retrieve claims from the passedToken
 // unneeded for Project 1 but included in case it is needed for later
-func ParseToken(passedToken string) *customClaims {
+func ParseToken(passedToken string) (*customClaims, error) {
 	parsedToken, _ := jwt.ParseWithClaims(passedToken, &customClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, fmt.Errorf("unexpected signing method")
+			return nil, errors.New("unexpected signing method")
 		}
-		return []byte(os.Getenv("TOKEN_SECRET")), nil
+		return nil, errors.New("error parsing token claims")
 	})
 
-	return parsedToken.Claims.(*customClaims)
+	return parsedToken.Claims.(*customClaims), nil
 }
 
 // returns a boolean value whether a file exists
