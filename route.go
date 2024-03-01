@@ -6,8 +6,8 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // create global variables to store the RSA key modulus and exponent
@@ -61,7 +62,7 @@ func Serve(w http.ResponseWriter, r *http.Request) {
 		h = post(auth)
 	case match(p, "/.well-known/jwks.json") && r.Method == "GET":
 		h = get(jwksPage)
-	case match(p, "/.well-known/.................................................................json") && r.Method == "GET":
+	case match(p, "/.well-known/......json") && r.Method == "GET":
 		h = get(kidJWK)
 	//if a match was not found, return a 405 error code and exit the function
 	default:
@@ -163,44 +164,29 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 	fileName := strings.Split(u.Path, "/")
 	jwkKid := strings.Split(fileName[2], ".")
 
-	//open the file associated with this URL and do error handling
-	fileContent, err := os.Open("./.well-known/jwks.json")
+	//retrieve specified kid from the database
+	sqliteDatabase, err := sql.Open("sqlite3", "./totally_not_my_privateKeys.db")
 	if err != nil {
-		return
+		panic(err)
 	}
+	defer sqliteDatabase.Close()
 
-	//read the file
-	byteResult, _ := io.ReadAll(fileContent)
-
-	//close the file
-	defer func() {
-		if err := fileContent.Close(); err != nil {
-			fmt.Printf("failed to close file: %v", err)
-		}
-	}()
-
-	//create a variable to store the JSON from the file
-	var keys JSONWrapper
-	//store the file's contents in the keys variable for standard JSON format
-	json.Unmarshal(byteResult, &keys)
-
-	//search the JWKS for the specified key
-	var foundIndex int
-	foundIndex = -1
-	for i := 0; i < len(keys.Keys); i++ {
-		if keys.Keys[i].Kid == jwkKid[0] {
-			foundIndex = i
-		}
+	//retrieve the specified row and return it
+	statement := "SELECT * FROM keys WHERE kid IS " + jwkKid[0] + " ORDER BY kid"
+	row, err := sqliteDatabase.Query(statement)
+	if err != nil {
+		panic(err)
 	}
+	defer row.Close()
 
-	//if that kid wasn't found, print error message
-	if foundIndex == -1 {
-		fmt.Println("Not found")
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	} else {
-		expDate, _ := strconv.ParseInt(keys.Keys[foundIndex].Exp, 10, 64)
-		if expDate <= time.Now().Unix() {
+	for row.Next() { // Iterate and fetch the records from result cursor
+		var kid int64
+		var key string
+		var exp int64
+		row.Scan(&kid, &key, &exp)
+
+		//check whether the key is expired
+		if exp <= time.Now().Unix() {
 			fmt.Println("Expired")
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
@@ -210,18 +196,18 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 
 			//assemble the data from the identified key
-			jsonJWK := fmt.Sprintf("{\"Kid\":\"%s\", \"Alg\": \"%s\", \"Kty\": \"%s\", \"Use\": \"%s\", \"N\":\"%s\", \"E\":\"%s\", \"Exp\":\"%s\"}", keys.Keys[foundIndex].Kid, keys.Keys[foundIndex].Alg, keys.Keys[foundIndex].Kty, keys.Keys[foundIndex].Use, keys.Keys[foundIndex].N, keys.Keys[foundIndex].E, keys.Keys[foundIndex].Exp)
+			jsonJWK := fmt.Sprintf("{\"Kid\":\"%d\", \"Exp\": \"%d\"}", kid, exp)
 			//prettify the JSON before printing it
 			prettyJSON, err := prettyprint([]byte(jsonJWK))
 			if err != nil {
 				fmt.Println("Prettify error in kidJWK")
+				fmt.Println(err.Error())
 				return
 			}
 			prettyJSONStr := string(prettyJSON)
 			fmt.Fprintf(w, "%s\n", prettyJSONStr)
 		}
 	}
-
 }
 
 // prints out the JSON text in a pretty format with the proper indents
@@ -248,7 +234,7 @@ func auth(w http.ResponseWriter, r *http.Request) {
 	//if there weren't any values following the ?, generate a standard JWT
 	if len(m) == 0 {
 		//generate the token
-		token, err = generateJWT(15000)
+		token, err = generateJWT(1500000)
 		//print an error message and the token to the console
 		if err != nil {
 			fmt.Println(err)
@@ -329,6 +315,7 @@ func auth(w http.ResponseWriter, r *http.Request) {
 
 // called when a page is gotten, displaying the page for the user and getting the jwks.json file
 func jwksPage(w http.ResponseWriter, r *http.Request) {
+	//retrieve the json file
 	//open the file associated with this URL and do error handling
 	fileContent, err := os.Open("./.well-known/jwks.json")
 	if err != nil {
@@ -342,12 +329,6 @@ func jwksPage(w http.ResponseWriter, r *http.Request) {
 	var keys JSONWrapper
 	//store the file's contents in the keys variable for standard JSON format
 	json.Unmarshal(byteResult, &keys)
-
-	/*//example code on how to parse out claims from a JWT; unnecessary for Project 1 but may be useful for later
-	parsedClaims := ParseToken("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InJhbmRvbSB1c2VyIG5hbWUiLCJleHAiOjE3MDcyNTUxNzUsImlhdCI6MTcwNzI1NTE3NSwiaXNzIjoibXkgd2Vic2l0ZSBuYW1lIGhlcmUifQ.2_RYleRvteJpU2I3ugWALmaT1Mle79eZ14rGVophGq4DkrkqfoBCpx16eInzrpdlI7kxfyx4yGhc634etfjd83dBMS51OyWMOMwXIu0PsxJlojFEpt_sikcyRWciG2gjC2-oeCcnoTS8h5Dy3wqqJECPEaprtPmi3AlikOhNg9bbjbgiXFLgj6c5k4P60E3NCKQ24lPmLm3HkTnPAHxM35tyzGpGKhNXJGtPCcnqhfkeRv9mzFxn4KRJzzuda68YlbpWUEYCy9ef4az7RAFWWgpinj4Fg407oYou0YRaP1VVR2nVCcbahsM0h3YufxfYfEkdl5_ym1BsohEH_qNrnA")
-	jsonClaims := fmt.Sprintf("{ \"username\": \"%s\", \"exp\": %d, \"iat\": %d, \"iss\": \"%s\"}", parsedClaims.Username, parsedClaims.StandardClaims.ExpiresAt, parsedClaims.StandardClaims.IssuedAt, parsedClaims.StandardClaims.Issuer)
-	prettyJSON, _ := prettyprint([]byte(jsonClaims))
-	fmt.Fprintf(w, "%s", prettyJSON)*/
 
 	var jsonJWK string
 	jsonJWK = "{\"keys\": ["
@@ -367,6 +348,63 @@ func jwksPage(w http.ResponseWriter, r *http.Request) {
 
 	prettyJSONStr := string(prettyJSON)
 	fmt.Fprintf(w, "%s\n", prettyJSONStr)
+
+	/*//example code on how to parse out claims from a JWT; unnecessary for Project 1 but may be useful for later
+	parsedClaims := ParseToken("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InJhbmRvbSB1c2VyIG5hbWUiLCJleHAiOjE3MDcyNTUxNzUsImlhdCI6MTcwNzI1NTE3NSwiaXNzIjoibXkgd2Vic2l0ZSBuYW1lIGhlcmUifQ.2_RYleRvteJpU2I3ugWALmaT1Mle79eZ14rGVophGq4DkrkqfoBCpx16eInzrpdlI7kxfyx4yGhc634etfjd83dBMS51OyWMOMwXIu0PsxJlojFEpt_sikcyRWciG2gjC2-oeCcnoTS8h5Dy3wqqJECPEaprtPmi3AlikOhNg9bbjbgiXFLgj6c5k4P60E3NCKQ24lPmLm3HkTnPAHxM35tyzGpGKhNXJGtPCcnqhfkeRv9mzFxn4KRJzzuda68YlbpWUEYCy9ef4az7RAFWWgpinj4Fg407oYou0YRaP1VVR2nVCcbahsM0h3YufxfYfEkdl5_ym1BsohEH_qNrnA")
+	jsonClaims := fmt.Sprintf("{ \"username\": \"%s\", \"exp\": %d, \"iat\": %d, \"iss\": \"%s\"}", parsedClaims.Username, parsedClaims.StandardClaims.ExpiresAt, parsedClaims.StandardClaims.IssuedAt, parsedClaims.StandardClaims.Issuer)
+	prettyJSON, _ := prettyprint([]byte(jsonClaims))
+	fmt.Fprintf(w, "%s", prettyJSON)*/
+
+	/*//retrieve the database
+	sqliteDatabase, err := sql.Open("sqlite3", "./totally_not_my_privateKeys.db")
+	if err != nil {
+		panic(err)
+	}
+	defer sqliteDatabase.Close()
+
+	//retrieve the specified row and return it
+	statement := "SELECT * FROM keys"
+	row, err := sqliteDatabase.Query(statement)
+	if err != nil {
+		panic(err)
+	}
+	defer row.Close()
+
+	// Iterate and fetch the records from result cursor
+	var jsonJWK string
+	jsonJWK = "{\"keys\": ["
+	for row.Next() {
+		var kid int64
+		var key string
+		var exp int64
+		var alg string
+		var kty string
+		var use string
+		var n string
+		var e string
+		row.Scan(&kid, &key, &exp, &alg, &kty, &use, &n, &e)
+		fmt.Println(kid)
+
+		//check whether the key is expired
+		if exp >= (time.Now().Unix() - 5) {
+			//assemble the data from the identified key
+			jsonJWK += fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"%s\", \"kty\": \"%s\", \"use\": \"%s\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"},", kid, alg, kty, use, n, e, exp)
+		}
+	}
+
+	//handle trailing commas and close up the JSON
+	jsonJWK = strings.TrimSuffix(jsonJWK, ",")
+	jsonJWK += "] }"
+
+	prettyJSON, err := prettyprint([]byte(jsonJWK))
+	if err != nil {
+		fmt.Println("Prettify error in JWKS page")
+		return
+	}
+
+	//print the results
+	prettyJSONStr := string(prettyJSON)
+	fmt.Fprintf(w, "%s\n", prettyJSONStr)*/
 }
 
 // this function returns either an error or a signed JWSON Web Token
@@ -404,12 +442,14 @@ func generateJWT(expTime int) (string, error) {
 
 	var claims customClaims
 	//set token expiration time and claims
+	expirationNow := time.Now().Unix()
+	expirationLater := time.Now().Add(time.Duration(expTime) * time.Hour).Unix()
 	if expTime > 0 {
 		claims = customClaims{
 			Username: "random user name",
 			StandardClaims: jwt.StandardClaims{
-				IssuedAt:  time.Now().Unix(),
-				ExpiresAt: time.Now().Add(time.Duration(expTime) * time.Hour).Unix(),
+				IssuedAt:  expirationNow,
+				ExpiresAt: expirationLater,
 				Issuer:    "my website name here",
 			},
 		}
@@ -417,11 +457,42 @@ func generateJWT(expTime int) (string, error) {
 		claims = customClaims{
 			Username: "random user name",
 			StandardClaims: jwt.StandardClaims{
-				IssuedAt:  time.Now().Unix(),
-				ExpiresAt: time.Now().Unix(),
+				IssuedAt:  expirationNow,
+				ExpiresAt: expirationNow,
 				Issuer:    "my website name here",
 			},
 		}
+	}
+
+	//open the database
+	sqliteDatabase, err := sql.Open("sqlite3", "./totally_not_my_privateKeys.db")
+	if err != nil {
+		panic(err)
+	}
+	defer sqliteDatabase.Close()
+
+	//retrieve the last autoincremented index
+	row, _ := sqliteDatabase.Query("select seq from sqlite_sequence where name='keys'")
+	defer row.Close()
+	var rowID int
+	for row.Next() {
+		row.Scan(&rowID)
+	}
+
+	//create the SQL statement
+	insertJWKSQL := `INSERT INTO keys (kid, key, exp) VALUES (?, ?, ?)`
+
+	//prepare the SQL statement to prevent injections
+	statement, err := sqliteDatabase.Prepare(insertJWKSQL)
+	if err != nil {
+		panic(err.Error)
+	}
+
+	//execute the insertion based on the expiration
+	if expTime > 0 {
+		statement.Exec(rowID, pubPEM, expirationLater)
+	} else {
+		statement.Exec(rowID, pubPEM, expirationNow)
 	}
 
 	//create token with claims
@@ -430,14 +501,9 @@ func generateJWT(expTime int) (string, error) {
 	//set token's kid in header based on whether it is expired
 	//if not expired, give it a proper kid
 	if expTime > 0 {
-		//generate the kid by hashing the public key
-		h := sha256.New()
-		h.Write([]byte(pubPEM))
-		bitSum := h.Sum(nil)
-		//assign that hash to the kid attribute in the header
-		token.Header["kid"] = fmt.Sprintf("%x", bitSum)
+		token.Header["kid"] = fmt.Sprintf("%x", rowID)
 	} else {
-		token.Header["kid"] = "expiredkid"
+		token.Header["kid"] = fmt.Sprintf("%x", rowID)
 	}
 
 	//sign token with RSA private key

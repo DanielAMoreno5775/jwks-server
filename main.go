@@ -1,5 +1,7 @@
 package main
 
+//https://www.codeproject.com/Articles/5261771/Golang-SQLite-Simple-Example
+
 import (
 	"context"
 	"fmt"

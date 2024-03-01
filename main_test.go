@@ -191,6 +191,9 @@ func TestGetSpecificJWK(t *testing.T) {
 
 	//retrieve the first KID in the file
 	jsonJWKKID := keys.Keys[0].Kid
+	for len(jsonJWKKID) != 5 {
+		jsonJWKKID = "0" + jsonJWKKID
+	}
 	requestURL := "/.well-known/" + jsonJWKKID + ".json"
 
 	//create an HTTP request and recorder
@@ -324,4 +327,16 @@ func TestPOSTAuthExpired(t *testing.T) {
 
 func TestAllowMethod(t *testing.T) {
 	allowMethod(Serve, "PATCH")
+}
+
+func TestRegexMatch(t *testing.T) {
+	if !match("test", "test") {
+		t.Errorf("Error with match function for test-test")
+	}
+	if !match("1", "1") {
+		t.Errorf("Error with match function for 1-1")
+	}
+	if match("114364368414896743814584183618", "1") {
+		t.Errorf("Error with match function for 114364368414896743814584183618-1")
+	}
 }
