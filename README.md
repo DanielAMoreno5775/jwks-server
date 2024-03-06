@@ -5,7 +5,7 @@ Open a terminal window in the root directory. Then, enter the following command.
 ```
 go run main.go route.go
 ```
-If this doesn't work, you can place it in a .bat file with the following lines
+If this doesn't work due to CGO being disabled, you can create a .bat file (assuming a Windows computer) with the following lines
 ```
 set CGO_ENABLED=1
 go run main.go route.go
@@ -27,10 +27,11 @@ If you see the error of
 # runtime/cgo
 cc1.exe: sorry, unimplemented: 64-bit mode not compiled in
 ```
-perform the following steps.
- 1. Install the tdm-gcc-64 bundle
- 2. Add that to the path
- 3. If the issue is still having issues, alter `go env` to point to tdm
+perform the following steps (assuming a Windows computer).
+ 1. Install the tdm-gcc-64 bundle for x86-64
+ 2. Add the file path to the PATH variable (Example: C:\TDM-GCC-64\bin)
+ 3. Move that file path to the top of the PATH variable list to prevent conflicts
+ 4. If the issue persists, alter `go env` to point to that file path
 
 ## Screenshots
 ![Coverage of Custom Test Suite](./Custom-Test-Suite-Screenshot.png)
