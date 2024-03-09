@@ -61,7 +61,7 @@ func Serve(w http.ResponseWriter, r *http.Request) {
 		h = post(auth)
 	case match(p, "/.well-known/jwks.json") && r.Method == "GET":
 		h = get(jwksPage)
-	case match(p, `/.well-known/......json`) && r.Method == "GET":
+	case match(p, `/.well-known/[1-9][0-9]*.json`) && r.Method == "GET":
 		h = get(kidJWK)
 	//if a match was not found, return a 405 error code and exit the function
 	default:
@@ -178,7 +178,7 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 	}
 	defer row.Close()
 
-	for row.Next() { // Iterate and fetch the records from result cursor
+	/*for row.Next() { // Iterate and fetch the records from result cursor
 		var kid int64
 		var key string
 		var exp int64
@@ -205,6 +205,76 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 			}
 			prettyJSONStr := string(prettyJSON)
 			fmt.Fprintf(w, "%s\n", prettyJSONStr)
+		}
+	}*/
+
+	// Iterate and fetch the records from result cursor
+	for row.Next() {
+		var kid int64
+		var key string
+		var exp int64
+		//extract the values from the database
+		row.Scan(&kid, &key, &exp)
+
+		//check whether the key is expired
+		if exp <= time.Now().Unix() {
+			fmt.Println("Expired")
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		} else {
+			//if it is a private key
+			if strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
+				//parse the key to get rsa.PrivateKey
+				parsedPrivateKey, _ := ParseRsaPrivateKeyFromPemStr(key)
+
+				//extract the modulus bytes (n)
+				modulusBytes := base64.StdEncoding.EncodeToString(parsedPrivateKey.N.Bytes())
+				modulusBytes = strings.ReplaceAll(modulusBytes, "/", "_")
+				modulusBytes = strings.ReplaceAll(modulusBytes, "+", "-")
+				modulusBytes = strings.ReplaceAll(modulusBytes, "=", "")
+				if (len(modulusBytes) % 2) != 0 {
+					modulusBytes = "A" + modulusBytes
+				}
+
+				//set the exponent bytes
+				privateExponentBytes := "AQAB"
+
+				//set the header to JSON so it knows what is being returned
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+
+				//assemble the data from the retrieved key
+				jsonJWK := fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"}", kid, modulusBytes, privateExponentBytes, exp)
+
+				//prettify the JSON before printing it
+				prettyJSON, err := prettyprint([]byte(jsonJWK))
+				if err != nil {
+					fmt.Println("Prettify error in kidJWK")
+					fmt.Println(err.Error())
+					return
+				}
+				prettyJSONStr := string(prettyJSON)
+				fmt.Fprintf(w, "%s\n", prettyJSONStr)
+			} else if strings.Contains(key, "-----BEGIN RSA PUBLIC KEY-----") {
+				//set the header to JSON so it knows what is being returned
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+
+				key = strings.ReplaceAll(key, "\n", "")
+
+				//assemble the data from the retrieved key
+				jsonJWK := fmt.Sprintf("{\"kid\": \"%d\", \"key\": \"%s\", \"exp\": \"%d\"}", kid, key, exp)
+
+				//prettify the JSON before printing it
+				prettyJSON, err := prettyprint([]byte(jsonJWK))
+				if err != nil {
+					fmt.Println("Prettify error in kidJWK")
+					fmt.Println(err.Error())
+					return
+				}
+				prettyJSONStr := string(prettyJSON)
+				fmt.Fprintf(w, "%s\n", prettyJSONStr)
+			}
 		}
 	}
 }

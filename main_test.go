@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,75 +36,96 @@ func TestHTTPServingFuncsWithServe(t *testing.T) {
 
 // function to verify valid JWKs in JWKS.json file
 func TestJWKSFile(t *testing.T) {
-	//try to open the file and handle any errors
-	fileContents, err := os.ReadFile("./.well-known/jwks.json")
-	if err != nil {
-		t.Errorf("jwks.json file doesn't exist")
-	}
-
 	//check whether file exists using written function; since the previous check was passed, this one should pass too
-	if !(checkFileExists("./.well-known/jwks.json")) {
-		t.Errorf("checkFileExists incorrectly marked jwks.json as missing ")
+	if !(checkFileExists("./totally_not_my_privateKeys.db")) {
+		t.Errorf("checkFileExists incorrectly marked the database file as missing ")
 	}
 
-	//convert the fileContents into a string
-	fileString := string(fileContents)
+	//retrieve the database
+	sqliteDatabase, err := sql.Open("sqlite3", "./totally_not_my_privateKeys.db")
+	if err != nil {
+		panic(err)
+	}
+	defer sqliteDatabase.Close()
 
-	//check if valid JSON string
-	if !isJSON(fileString) {
-		t.Errorf("Invalid JSON in jwks.json file")
+	//check whether the keys table exists
+	tableCheckResult, _ := sqliteDatabase.Query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='keys';")
+	defer tableCheckResult.Close()
+	var tableCheckInt int
+	for tableCheckResult.Next() {
+		tableCheckResult.Scan(&tableCheckInt)
+	}
+	if tableCheckInt != 1 {
+		t.Errorf("The keys table does not exist")
 	}
 
-	//check whether JSON in the file meets the JWKS format
-	//create a variable to store the JSON from the file
-	var keys JSONWrapper
-	//store the file's contents in the keys variable for standard JSON format and create string to store precise string
-	json.Unmarshal(fileContents, &keys)
+	//count the number of columns in the table
+	colCount, _ := sqliteDatabase.Query("SELECT COUNT(*) FROM PRAGMA_TABLE_INFO('keys')")
+	defer colCount.Close()
+	var numOfCols int
+	for colCount.Next() {
+		colCount.Scan(&numOfCols)
+	}
+	if numOfCols != 3 {
+		t.Errorf("Wrong number of fields in keys table")
+	}
+
+	//retrieve the specified row and return it
+	statement := "SELECT * FROM keys"
+	row, err := sqliteDatabase.Query(statement)
+	if err != nil {
+		panic(err)
+	}
+	defer row.Close()
+
+	// Iterate and fetch the records from result cursor
 	var jsonJWK string
-
-	//attempt to assemble the string
 	jsonJWK = "{\"keys\": ["
-	for i := 0; i < len(keys.Keys); i++ {
-		//test each value in the key to ensure it exists
-		if keys.Keys[i].Kid == "" {
-			t.Errorf("Empty KID attribute stored in Key: %d", i)
-		} else if keys.Keys[i].Alg == "" {
-			t.Errorf("Empty Alg attribute stored in Key: %d", i)
-		} else if keys.Keys[i].Kty == "" {
-			t.Errorf("Empty Kty attribute stored in Key: %d", i)
-		} else if keys.Keys[i].Use == "" {
-			t.Errorf("Empty Use attribute stored in Key: %d", i)
-		} else if keys.Keys[i].N == "" {
-			t.Errorf("Empty N attribute stored in Key: %d", i)
-		} else if keys.Keys[i].E == "" {
-			t.Errorf("Empty E attribute stored in Key: %d", i)
-		} else if keys.Keys[i].Exp == "" {
-			t.Errorf("Empty Exp attribute stored in Key: %d", i)
-		}
+	for row.Next() {
+		var kid int64
+		var key string
+		var exp int64
+		//extract the values from the database
+		row.Scan(&kid, &key, &exp)
 
-		//try to convert expiration date into int64
-		_, err := strconv.ParseInt(keys.Keys[i].Exp, 10, 64)
-		//if the expiration date can't be turned into an int64, mark as failure
-		if err != nil {
-			t.Errorf("Invalid expiration date stored in Key: %d", i)
-		}
+		//since the database contains private and public keys, only try to decrypt the private keys
+		if strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
+			//parse the key to get rsa.PrivateKey
+			parsedPrivateKey, err := ParseRsaPrivateKeyFromPemStr(key)
+			if err != nil {
+				t.Errorf("Error parsing RSA private key from database")
+			}
 
-		jsonJWK += fmt.Sprintf("{\"kid\":\"%s\", \"alg\": \"%s\", \"kty\": \"%s\", \"use\": \"%s\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%s\"},", keys.Keys[i].Kid, keys.Keys[i].Alg, keys.Keys[i].Kty, keys.Keys[i].Use, keys.Keys[i].N, keys.Keys[i].E, keys.Keys[i].Exp)
+			//extract the modulus bytes (n)
+			modulusBytes = base64.StdEncoding.EncodeToString(parsedPrivateKey.N.Bytes())
+			modulusBytes = strings.ReplaceAll(modulusBytes, "/", "_")
+			modulusBytes = strings.ReplaceAll(modulusBytes, "+", "-")
+			modulusBytes = strings.ReplaceAll(modulusBytes, "=", "")
+			if (len(modulusBytes) % 2) != 0 {
+				modulusBytes = "A" + modulusBytes
+			}
+
+			//set the exponent bytes
+			privateExponentBytes = "AQAB"
+
+			//if the key is not expired, append it to the JSON string
+			if exp > time.Now().Unix() {
+				//assemble the data from the retrieved key
+				jsonJWK += fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"},", kid, modulusBytes, privateExponentBytes, exp)
+			}
+		}
 	}
+
+	//handle trailing commas and close up the JSON
 	jsonJWK = strings.TrimSuffix(jsonJWK, ",")
 	jsonJWK += "] }"
-	prettyJSON, err := prettyprint([]byte(jsonJWK))
+
+	//prettify the JSON
+	_, err = prettyprint([]byte(jsonJWK))
 	if err != nil {
-		t.Errorf("Invalid JSON in jwks.json file - prettify error")
+		t.Errorf("Prettify error in JWKS page")
 		return
 	}
-	_ = prettyJSON
-}
-
-// check if valid json
-func isJSON(str string) bool {
-	var js json.RawMessage
-	return json.Unmarshal([]byte(str), &js) == nil
 }
 
 // very quick check to ensure mainActual serves up pages correctly
@@ -178,23 +201,40 @@ func TestHomePage(t *testing.T) {
 }
 
 func TestGetSpecificJWK(t *testing.T) {
-	//try to open the file with minimal error checking as most should have been handled earlier
-	fileContents, err := os.ReadFile("./.well-known/jwks.json")
+	//retrieve specified kid from the database
+	sqliteDatabase, err := sql.Open("sqlite3", "./totally_not_my_privateKeys.db")
 	if err != nil {
-		t.Errorf("jwks.json file doesn't exist")
+		panic(err)
+	}
+	defer sqliteDatabase.Close()
+
+	//retrieve the specified row and return it
+	statement := "SELECT * FROM keys ORDER BY kid"
+	row, err := sqliteDatabase.Query(statement)
+	if err != nil {
+		panic(err)
+	}
+	defer row.Close()
+
+	// Iterate and fetch the records from result cursor
+	var storedPublicKID int64
+	var storedPrivateKID int64
+	for row.Next() {
+		var kid int64
+		var key string
+		var exp int64
+		//extract the values from the database
+		row.Scan(&kid, &key, &exp)
+
+		//if the key is not expired, exit the for loop and keep the current kid
+		if exp > time.Now().Unix() && strings.Contains(key, "-----BEGIN RSA PUBLIC KEY-----") {
+			storedPublicKID = kid
+		} else if exp > time.Now().Unix() && strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
+			storedPrivateKID = kid
+		}
 	}
 
-	//create a variable to store the JSON from the file
-	var keys JSONWrapper
-	//store the file's contents in the keys variable for standard JSON format and create string to store precise string
-	json.Unmarshal(fileContents, &keys)
-
-	//retrieve the first KID in the file
-	jsonJWKKID := keys.Keys[0].Kid
-	for len(jsonJWKKID) != 5 {
-		jsonJWKKID = "0" + jsonJWKKID
-	}
-	requestURL := "/.well-known/" + jsonJWKKID + ".json"
+	requestURL := fmt.Sprintf("/.well-known/%d.json", storedPublicKID)
 
 	//create an HTTP request and recorder
 	req := httptest.NewRequest(http.MethodGet, requestURL, nil)
@@ -217,7 +257,35 @@ func TestGetSpecificJWK(t *testing.T) {
 	//if the prettify succeeds, assumes valid output due to earlier tests
 	prettyJSON, err := prettyprint(data)
 	if err != nil {
-		t.Errorf("Invalid JSON returned when %s.json is called", jsonJWKKID)
+		t.Errorf("Invalid JSON returned when %d.json is called for Public Key", storedPublicKID)
+		return
+	}
+	_ = prettyJSON
+
+	requestURL = fmt.Sprintf("/.well-known/%d.json", storedPrivateKID)
+
+	//create an HTTP request and recorder
+	req = httptest.NewRequest(http.MethodGet, requestURL, nil)
+	w = httptest.NewRecorder()
+
+	//call the Serve function, store the results, and defer the closing
+	Serve(w, req)
+	res = w.Result()
+	defer res.Body.Close()
+
+	//try to read the returned page
+	data, err = io.ReadAll(res.Body)
+
+	//ensure no errors when sending the GET request
+	if err != nil {
+		t.Errorf("Error when sending GET request to /: %v", err)
+	}
+
+	//try to prettify retrieved data into valid JSON
+	//if the prettify succeeds, assumes valid output due to earlier tests
+	prettyJSON, err = prettyprint(data)
+	if err != nil {
+		t.Errorf("Invalid JSON returned when %d.json is called for Private Key", storedPrivateKID)
 		return
 	}
 	_ = prettyJSON
@@ -327,6 +395,7 @@ func TestPOSTAuthExpired(t *testing.T) {
 
 func TestAllowMethod(t *testing.T) {
 	allowMethod(Serve, "PATCH")
+	allowMethod(kidJWK, "PATCH")
 }
 
 func TestRegexMatch(t *testing.T) {
@@ -338,5 +407,13 @@ func TestRegexMatch(t *testing.T) {
 	}
 	if match("114364368414896743814584183618", "1") {
 		t.Errorf("Error with match function for 114364368414896743814584183618-1")
+	}
+}
+
+func TestParseRsaPrivateKeyFromPemStr(t *testing.T) {
+	_, err := ParseRsaPrivateKeyFromPemStr("test")
+
+	if err == nil {
+		t.Errorf("ParseRsaPrivateKeyFromPemStr parsed a string that is not an RSA private key")
 	}
 }
