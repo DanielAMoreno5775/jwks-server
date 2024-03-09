@@ -33,6 +33,13 @@ perform the following steps (assuming a Windows computer).
  3. Move that file path to the top of the PATH variable list to prevent conflicts
  4. If the issue persists, alter `go env` to point to that file path
 
+## Fixing a Frozen Screen
+If you ran `go run main.go route.go` but never got the response of `Server listening on port :8080`,
+ 1. Try entering Ctrl+C once. If the response above appears, the problem is fixed.
+ 2. Try entering Ctrl+C once. This should print an exit status and return you to the command line. If not, skip to 4.
+ 3. If you are back at the command line, try to run the program again.
+ 4. If you aren't back at the command line, try Ctrl+Pause|Break to return to the command line. If this worked, return to 3.
+
 ## Screenshots
 ![Coverage of Custom Test Suite](./Custom-Test-Suite-Screenshot.png)
 ![Rubric Result of Gradebot Project 1](./Gradebot-Screenshot-Project1.png)
