@@ -58,6 +58,12 @@ type userRegDetails struct {
 	Email    string `json:"email"`
 }
 
+// structure to store user auth request
+type userAuthRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 // create struct to define parameters for Argon2 hashing
 type params struct {
 	memory      uint32
@@ -222,17 +228,18 @@ func register(w http.ResponseWriter, r *http.Request) {
 	defer sqliteDatabase.Close()
 
 	//create the insertion statement for the users table
-	//doesn't insert info into id or date_registered as auto-filled or into last_login as not applicable and can be null
-	insertJWKSQL := `INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)`
+	//doesn't insert info into id or date_registered as auto-filled
+	//inserts a default value into last_login to prevent issues with auth
+	insertUsrSQL := `INSERT INTO users (username, password_hash, email, last_login) VALUES (?, ?, ?, ?)`
 
 	//prepare the SQL statement to prevent injections
-	statement, err := sqliteDatabase.Prepare(insertJWKSQL)
+	statement, err := sqliteDatabase.Prepare(insertUsrSQL)
 	if err != nil {
 		panic(err.Error)
 	}
 
 	//execute the insertion
-	statement.Exec(registrationDetails.Username, hash, registrationDetails.Email)
+	statement.Exec(registrationDetails.Username, hash, registrationDetails.Email, "2024-01-01 17:51:31")
 }
 
 func hashPassword(password string, p *params) (encodedHash string, err error) {
@@ -384,22 +391,65 @@ func prettyprint(b []byte) ([]byte, error) {
 
 // called when a page is gotten, displaying the page for the user
 func auth(w http.ResponseWriter, r *http.Request) {
-	//set the header to JSON so it knows what is being returned
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	//declare a new userRegDetails struct
+	var authenticationDetails userAuthRequest
+
+	//try to decode the request body into the declared structure
+	//if there is an error, return a 400 status code
+	err := json.NewDecoder(r.Body).Decode(&authenticationDetails)
+	if err != nil {
+		http.Error(w, "400 bad request", http.StatusBadRequest)
+		return
+	}
+
+	//open the database to save the new user details
+	sqliteDatabase, err := sql.Open("sqlite3", "./totally_not_my_privateKeys.db")
+	if err != nil {
+		panic(err)
+	}
+	defer sqliteDatabase.Close()
+
+	//retrieve the user ID for the passed username
+	selectSQL := "SELECT * FROM users WHERE username IS '" + authenticationDetails.Username + "' ORDER BY username"
+	row, err := sqliteDatabase.Query(selectSQL)
+	if err != nil {
+		panic(err)
+	}
+	defer row.Close()
+	var usrID int
+	var usrName string
+	var usrPswdHash string
+	var usrEmail string
+	var usrDateRegistered string
+	var usrLastLogin string
+	for row.Next() {
+		row.Scan(&usrID, &usrName, &usrPswdHash, &usrEmail, &usrDateRegistered, &usrLastLogin)
+	}
+
+	//retrieve the request IP address
+	ipAddr := ReadUserIP(r)
+
+	//create the insertion statement for the users table
+	//doesn't insert info into id or request_timestamp as auto-filled
+	insertAuthLogSQL := `INSERT INTO auth_logs (request_ip, user_id) VALUES (?, ?)`
+
+	//prepare the SQL statement to prevent injections
+	statement, err := sqliteDatabase.Prepare(insertAuthLogSQL)
+	if err != nil {
+		panic(err.Error)
+	}
+
+	statement.Exec(ipAddr, usrID)
 
 	//get the url that the user entered as a string
 	u, _ := url.Parse(r.URL.String())
 	//create a map of the stuff following any ?s
 	m, _ := url.ParseQuery(u.RawQuery)
 
-	var token string
-	var err error
-
 	//if there weren't any values following the ?, generate a standard JWT
 	if len(m) == 0 {
 		//generate the token
-		token, err = generateJWT(1500000)
+		token, err := generateJWT(1500000)
 		//print an error message and the token to the console
 		if err != nil {
 			fmt.Println(err)
@@ -411,7 +461,7 @@ func auth(w http.ResponseWriter, r *http.Request) {
 	//based on short-circuit evaluation
 	if len(m) == 1 && m["expired"][0] == "true" {
 		//generate the token
-		token, err = generateJWT(-10)
+		token, err := generateJWT(-10)
 		//print an error message and the token to the console
 		if err != nil {
 			fmt.Println(err)
@@ -419,6 +469,23 @@ func auth(w http.ResponseWriter, r *http.Request) {
 		//provide the token to the client
 		fmt.Fprintf(w, "%s", token)
 	}
+}
+
+// retrieve the client's IP address or list of IP addresses in comma-separated list
+func ReadUserIP(r *http.Request) string {
+	//retrieves the first true IP (in case client sits behind multiple NATs or load balancers)
+	IPAddress := r.Header.Get("X-Real-Ip")
+	//if the previous method failed, use X-Forwarded-For
+	//secondary option as may return a list of IP addresses (CSV) in the case of proxy-chaining
+	if IPAddress == "" {
+		IPAddress = r.Header.Get("X-Forwarded-For")
+	}
+	//if the previous method failed, use RemoteAddr
+	//last resort and unreliable as it might be the last IP or might come from a naked http request
+	if IPAddress == "" {
+		IPAddress = r.RemoteAddr
+	}
+	return IPAddress
 }
 
 // called when a page is gotten, displaying the page for the user and getting the database file
