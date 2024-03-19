@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -472,11 +473,21 @@ func generateJWT(expTime int) (string, error) {
 		panic(err.Error)
 	}
 
+	//encrypt the private key before inserting it into the database using the environment variable of NOT_MY_KEY
+	//retrieve the stored key and generate the AES cipher
+	secret := os.Getenv("NOT_MY_KEY")
+	aes, _ := aes.NewCipher([]byte(secret))
+	//create a buffer with the same length of the private PEM key
+	ciphertext := make([]byte, len(privatePEM))
+	//encrypt privatePEM and store it in ciphertext
+	aes.Encrypt(ciphertext, privatePEM)
+
 	//execute the insertion based on the desired expiration that was passed
+	//insert the encrypted private key and the expiration time
 	if expTime > 0 {
-		statement.Exec(privatePEM, expirationLater)
+		statement.Exec(ciphertext, expirationLater)
 	} else {
-		statement.Exec(privatePEM, expirationNow)
+		statement.Exec(ciphertext, expirationNow)
 	}
 
 	//retrieve the last autoincremented index from the special sqlite_sequence table

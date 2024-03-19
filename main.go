@@ -20,6 +20,13 @@ func main() { mainActual(os.Stdout, Serve, 360000) }
 
 // takes a writer (stdout normally), a HTTP handler function (Serve normally), and the number of seconds to serve it (100 hours)
 func mainActual(w io.Writer, h http.HandlerFunc, timeServed int64) {
+
+	//create a 32-byte AES key for AES-256
+	secret := "N1PCdw3M2B1TfJhoaY2mL736p2vCUc47"
+
+	//create an environment variable called NOT_MY_KEY
+	os.Setenv("NOT_MY_KEY", secret)
+
 	httpServerExitDone := &sync.WaitGroup{}
 
 	httpServerExitDone.Add(1)

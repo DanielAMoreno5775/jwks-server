@@ -11,7 +11,7 @@ set CGO_ENABLED=1
 go run main.go route.go
 ```
 
-Accessing a specific kid can be done with the following URL, if it is not expired: http://localhost:8080/.well-known/14.json
+Accessing a specific kid can be done with the following URL, if it is not expired: http://localhost:8080/.well-known/123.json
 
 ## Test Suite
 Open a terminal window in the root directory. Then, enter the following commands in the following order.
