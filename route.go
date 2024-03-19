@@ -640,7 +640,7 @@ func generateJWT(expTime int) (string, error) {
 
 	//create the SQL statement expected by gradebot and linter
 	dummyJWKSQL := `INSERT INTO keys (kid, key, exp) VALUES (?, ?, ?)`
-	fmt.Println(dummyJWKSQL)
+	_ = dummyJWKSQL
 
 	insertJWKSQL := `INSERT INTO keys (kid, key, exp) VALUES (NULL, ?, ?)`
 

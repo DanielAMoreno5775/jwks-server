@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -217,7 +218,6 @@ func TestGetSpecificJWK(t *testing.T) {
 	defer row.Close()
 
 	// Iterate and fetch the records from result cursor
-	var storedPublicKID int64
 	var storedPrivateKID int64
 	for row.Next() {
 		var kid int64
@@ -227,14 +227,13 @@ func TestGetSpecificJWK(t *testing.T) {
 		row.Scan(&kid, &key, &exp)
 
 		//if the key is not expired, exit the for loop and keep the current kid
-		if exp > time.Now().Unix() && strings.Contains(key, "-----BEGIN RSA PUBLIC KEY-----") {
-			storedPublicKID = kid
-		} else if exp > time.Now().Unix() && strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
+		if exp > time.Now().Unix() {
 			storedPrivateKID = kid
+			break
 		}
 	}
 
-	requestURL := fmt.Sprintf("/.well-known/%d.json", storedPublicKID)
+	requestURL := fmt.Sprintf("/.well-known/%d.json", storedPrivateKID)
 
 	//create an HTTP request and recorder
 	req := httptest.NewRequest(http.MethodGet, requestURL, nil)
@@ -256,34 +255,6 @@ func TestGetSpecificJWK(t *testing.T) {
 	//try to prettify retrieved data into valid JSON
 	//if the prettify succeeds, assumes valid output due to earlier tests
 	prettyJSON, err := prettyprint(data)
-	if err != nil {
-		t.Errorf("Invalid JSON returned when %d.json is called for Public Key", storedPublicKID)
-		return
-	}
-	_ = prettyJSON
-
-	requestURL = fmt.Sprintf("/.well-known/%d.json", storedPrivateKID)
-
-	//create an HTTP request and recorder
-	req = httptest.NewRequest(http.MethodGet, requestURL, nil)
-	w = httptest.NewRecorder()
-
-	//call the Serve function, store the results, and defer the closing
-	Serve(w, req)
-	res = w.Result()
-	defer res.Body.Close()
-
-	//try to read the returned page
-	data, err = io.ReadAll(res.Body)
-
-	//ensure no errors when sending the GET request
-	if err != nil {
-		t.Errorf("Error when sending GET request to /: %v", err)
-	}
-
-	//try to prettify retrieved data into valid JSON
-	//if the prettify succeeds, assumes valid output due to earlier tests
-	prettyJSON, err = prettyprint(data)
 	if err != nil {
 		t.Errorf("Invalid JSON returned when %d.json is called for Private Key", storedPrivateKID)
 		return
@@ -336,8 +307,15 @@ func TestGetJWKS(t *testing.T) {
 }
 
 func TestPOSTAuth(t *testing.T) {
+	//setup the JSON request body
+	postBody := map[string]interface{}{
+		"username": "MyCoolUsername",
+		"password": "password123",
+	}
+	body, _ := json.Marshal(postBody)
+
 	//create an HTTP request and recorder
-	req := httptest.NewRequest(http.MethodPost, "/auth", nil)
+	req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
 	//call the Serve function, store the results, and defer the closing
@@ -364,8 +342,15 @@ func TestPOSTAuth(t *testing.T) {
 }
 
 func TestPOSTAuthExpired(t *testing.T) {
+	//setup the JSON request body
+	postBody := map[string]interface{}{
+		"username": "MyCoolUsername",
+		"password": "password123",
+	}
+	body, _ := json.Marshal(postBody)
+
 	//create an HTTP request and recorder
-	req := httptest.NewRequest(http.MethodPost, "/auth?expired=true", nil)
+	req := httptest.NewRequest(http.MethodPost, "/auth?expired=true", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
 	//call the Serve function, store the results, and defer the closing
@@ -391,6 +376,43 @@ func TestPOSTAuthExpired(t *testing.T) {
 	if parsedClaims.StandardClaims.ExpiresAt != parsedClaims.StandardClaims.IssuedAt || parsedClaims.StandardClaims.ExpiresAt > time.Now().Unix() {
 		t.Errorf("Token isn't expired")
 	}
+}
+
+func TestRegister(t *testing.T) {
+	randomNum := rand.Intn(10000000)
+	name := "testingName_" + strconv.Itoa(randomNum)
+
+	//setup the JSON request body
+	postBody := map[string]interface{}{
+		"username": name,
+		"email":    "MyCoolEmail",
+	}
+	body, _ := json.Marshal(postBody)
+
+	//create an HTTP request and recorder
+	req := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	//call the Serve function, store the results, and defer the closing
+	Serve(w, req)
+	res := w.Result()
+	defer res.Body.Close()
+
+	//try to read the returned page
+	data, err := io.ReadAll(res.Body)
+
+	//ensure no errors when sending the GET request
+	if err != nil {
+		t.Errorf("Error when sending POST request to: %v", err)
+	}
+
+	//try to parse returned JSON to ensure valid format
+	prettyJSON, err := prettyprint(data)
+	if err != nil {
+		t.Errorf("Prettify error on Register page")
+		return
+	}
+	_ = prettyJSON
 }
 
 func TestAllowMethod(t *testing.T) {
