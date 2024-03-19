@@ -503,13 +503,41 @@ func jwksPage(w http.ResponseWriter, r *http.Request) {
 	jsonJWK = "{\"keys\": ["
 	for row.Next() {
 		var kid int64
-		var key string
+		var encryptedKey string
 		var exp int64
 		//extract the values from the database
-		row.Scan(&kid, &key, &exp)
+		row.Scan(&kid, &encryptedKey, &exp)
 
-		//since the database contains private and public keys, only try to decrypt the private keys
-		if strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
+		//check whether the key is expired
+		if exp > time.Now().Unix() {
+			//decrypt the key
+			secret := os.Getenv("NOT_MY_KEY")
+			aes, _ := aes.NewCipher([]byte(secret))
+			gcm, _ := cipher.NewGCM(aes)
+			nonceSize := gcm.NonceSize()
+			nonce, ciphertextKey := encryptedKey[:nonceSize], encryptedKey[nonceSize:]
+			plaintextKey, _ := gcm.Open(nil, []byte(nonce), []byte(ciphertextKey), nil)
+
+			//parse the key to get rsa.PrivateKey
+			parsedPrivateKey, _ := ParseRsaPrivateKeyFromPemStr(string(plaintextKey[:]))
+
+			//extract the modulus bytes (n)
+			modulusBytes := base64.StdEncoding.EncodeToString(parsedPrivateKey.N.Bytes())
+			modulusBytes = strings.ReplaceAll(modulusBytes, "/", "_")
+			modulusBytes = strings.ReplaceAll(modulusBytes, "+", "-")
+			modulusBytes = strings.ReplaceAll(modulusBytes, "=", "")
+			if (len(modulusBytes) % 2) != 0 {
+				modulusBytes = "A" + modulusBytes
+			}
+
+			//set the exponent bytes
+			privateExponentBytes := "AQAB"
+
+			//assemble the data from the retrieved key
+			jsonJWK += fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"},", kid, modulusBytes, privateExponentBytes, exp)
+		}
+
+		/*if strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
 			//parse the key to get rsa.PrivateKey
 			parsedPrivateKey, _ := ParseRsaPrivateKeyFromPemStr(key)
 
@@ -530,7 +558,7 @@ func jwksPage(w http.ResponseWriter, r *http.Request) {
 				//assemble the data from the retrieved key
 				jsonJWK += fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"},", kid, modulusBytes, privateExponentBytes, exp)
 			}
-		}
+		}*/
 	}
 
 	//handle trailing commas and close up the JSON
