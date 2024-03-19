@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -314,10 +315,10 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 	// Iterate and fetch the records from result cursor
 	for row.Next() {
 		var kid int64
-		var key string
+		var encryptedKey string
 		var exp int64
 		//extract the values from the database
-		row.Scan(&kid, &key, &exp)
+		row.Scan(&kid, &encryptedKey, &exp)
 
 		//check whether the key is expired
 		if exp <= time.Now().Unix() {
@@ -325,59 +326,45 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		} else {
-			//if it is a private key
-			if strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
-				//parse the key to get rsa.PrivateKey
-				parsedPrivateKey, _ := ParseRsaPrivateKeyFromPemStr(key)
+			//decrypt the key
+			secret := os.Getenv("NOT_MY_KEY")
+			aes, _ := aes.NewCipher([]byte(secret))
+			gcm, _ := cipher.NewGCM(aes)
+			nonceSize := gcm.NonceSize()
+			nonce, ciphertextKey := encryptedKey[:nonceSize], encryptedKey[nonceSize:]
+			plaintextKey, _ := gcm.Open(nil, []byte(nonce), []byte(ciphertextKey), nil)
 
-				//extract the modulus bytes (n)
-				modulusBytes := base64.StdEncoding.EncodeToString(parsedPrivateKey.N.Bytes())
-				modulusBytes = strings.ReplaceAll(modulusBytes, "/", "_")
-				modulusBytes = strings.ReplaceAll(modulusBytes, "+", "-")
-				modulusBytes = strings.ReplaceAll(modulusBytes, "=", "")
-				if (len(modulusBytes) % 2) != 0 {
-					modulusBytes = "A" + modulusBytes
-				}
+			//parse the key to get rsa.PrivateKey
+			parsedPrivateKey, _ := ParseRsaPrivateKeyFromPemStr(string(plaintextKey[:]))
 
-				//set the exponent bytes
-				privateExponentBytes := "AQAB"
-
-				//set the header to JSON so it knows what is being returned
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-
-				//assemble the data from the retrieved key
-				jsonJWK := fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"}", kid, modulusBytes, privateExponentBytes, exp)
-
-				//prettify the JSON before printing it
-				prettyJSON, err := prettyprint([]byte(jsonJWK))
-				if err != nil {
-					fmt.Println("Prettify error in kidJWK")
-					fmt.Println(err.Error())
-					return
-				}
-				prettyJSONStr := string(prettyJSON)
-				fmt.Fprintf(w, "%s\n", prettyJSONStr)
-			} else if strings.Contains(key, "-----BEGIN RSA PUBLIC KEY-----") {
-				//set the header to JSON so it knows what is being returned
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-
-				key = strings.ReplaceAll(key, "\n", "")
-
-				//assemble the data from the retrieved key
-				jsonJWK := fmt.Sprintf("{\"kid\": \"%d\", \"key\": \"%s\", \"exp\": \"%d\"}", kid, key, exp)
-
-				//prettify the JSON before printing it
-				prettyJSON, err := prettyprint([]byte(jsonJWK))
-				if err != nil {
-					fmt.Println("Prettify error in kidJWK")
-					fmt.Println(err.Error())
-					return
-				}
-				prettyJSONStr := string(prettyJSON)
-				fmt.Fprintf(w, "%s\n", prettyJSONStr)
+			//extract the modulus bytes (n)
+			modulusBytes := base64.StdEncoding.EncodeToString(parsedPrivateKey.N.Bytes())
+			modulusBytes = strings.ReplaceAll(modulusBytes, "/", "_")
+			modulusBytes = strings.ReplaceAll(modulusBytes, "+", "-")
+			modulusBytes = strings.ReplaceAll(modulusBytes, "=", "")
+			if (len(modulusBytes) % 2) != 0 {
+				modulusBytes = "A" + modulusBytes
 			}
+
+			//set the exponent bytes
+			privateExponentBytes := "AQAB"
+
+			//set the header to JSON so it knows what is being returned
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+
+			//assemble the data from the retrieved key
+			jsonJWK := fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"}", kid, modulusBytes, privateExponentBytes, exp)
+
+			//prettify the JSON before printing it
+			prettyJSON, err := prettyprint([]byte(jsonJWK))
+			if err != nil {
+				fmt.Println("Prettify error in kidJWK")
+				fmt.Println(err.Error())
+				return
+			}
+			prettyJSONStr := string(prettyJSON)
+			fmt.Fprintf(w, "%s\n", prettyJSONStr)
 		}
 	}
 }
@@ -639,10 +626,10 @@ func generateJWT(expTime int) (string, error) {
 	//retrieve the stored key and generate the AES cipher
 	secret := os.Getenv("NOT_MY_KEY")
 	aes, _ := aes.NewCipher([]byte(secret))
-	//create a buffer with the same length of the private PEM key
-	ciphertext := make([]byte, len(privatePEM))
-	//encrypt privatePEM and store it in ciphertext
-	aes.Encrypt(ciphertext, privatePEM)
+	gcm, _ := cipher.NewGCM(aes)
+	nonce := make([]byte, gcm.NonceSize())
+	rand.Read(nonce)
+	ciphertext := gcm.Seal(nonce, nonce, []byte(privatePEM), nil)
 
 	//execute the insertion based on the desired expiration that was passed
 	//insert the encrypted private key and the expiration time
