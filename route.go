@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt"
+	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
+	"golang.org/x/crypto/argon2"
 )
 
 // create global variables to store the RSA key modulus and exponent
@@ -44,9 +46,25 @@ type JSONWrapper struct {
 	}
 }
 
+// structure to store claims for JWTs
 type customClaims struct {
 	Username string `json:"username"`
 	jwt.StandardClaims
+}
+
+// structure to store user registration details
+type userRegDetails struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+}
+
+// create struct to define parameters for Argon2 hashing
+type params struct {
+	memory      uint32
+	iterations  uint32
+	parallelism uint8
+	saltLength  uint32 //units in bytes, docs recommend 16
+	keyLength   uint32 //units in bytes, AES needs 32
 }
 
 func Serve(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +78,8 @@ func Serve(w http.ResponseWriter, r *http.Request) {
 		h = get(home)
 	case match(p, "/auth") && r.Method == "POST":
 		h = post(auth)
+	case match(p, "/register") && r.Method == "POST":
+		h = post(register)
 	case match(p, "/.well-known/jwks.json") && r.Method == "GET":
 		h = get(jwksPage)
 	case match(p, `/.well-known/[1-9][0-9]*.json`) && r.Method == "GET":
@@ -157,6 +177,111 @@ func home(w http.ResponseWriter, r *http.Request) {
 }
 
 // called when a page is gotten, displaying the page for the user
+func register(w http.ResponseWriter, r *http.Request) {
+	//set header for successful registration
+	w.WriteHeader(http.StatusCreated)
+
+	//declare a new userRegDetails struct
+	var registrationDetails userRegDetails
+
+	//try to decode the request body into the declared structure
+	//if there is an error, return a 400 status code
+	err := json.NewDecoder(r.Body).Decode(&registrationDetails)
+	if err != nil {
+		http.Error(w, "400 bad request", http.StatusBadRequest)
+		return
+	}
+
+	//use Google's UUID library to generate a UUIDv4
+	id := uuid.NewString()
+
+	//send that UUID to the user as their new password & return 201 status code
+	fmt.Fprintf(w, "{\"password\": \"%s\"}", id)
+
+	//hash the UUID password with Argon2
+	//create a instance of the structure with the parameters all set
+	p := &params{
+		memory:      64 * 1024,
+		iterations:  4,
+		parallelism: 8,
+		saltLength:  16,
+		keyLength:   32,
+	}
+	//call a function to hash the UUID password and handle any errors
+	hash, err := hashPassword(id, p)
+	if err != nil {
+		http.Error(w, "400 bad request", http.StatusBadRequest)
+		return
+	}
+
+	//open the database to save the new user details
+	sqliteDatabase, err := sql.Open("sqlite3", "./totally_not_my_privateKeys.db")
+	if err != nil {
+		panic(err)
+	}
+	defer sqliteDatabase.Close()
+
+	//create the insertion statement for the users table
+	//doesn't insert info into id or date_registered as auto-filled or into last_login as not applicable and can be null
+	insertJWKSQL := `INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)`
+
+	//prepare the SQL statement to prevent injections
+	statement, err := sqliteDatabase.Prepare(insertJWKSQL)
+	if err != nil {
+		panic(err.Error)
+	}
+
+	//execute the insertion
+	statement.Exec(registrationDetails.Username, hash, registrationDetails.Email)
+}
+
+func hashPassword(password string, p *params) (encodedHash string, err error) {
+	// Generate a cryptographically secure random salt using random bytes
+	salt, err := generateRandomBytes(p.saltLength)
+	if err != nil {
+		return "", err
+	}
+
+	// Pass the plaintext password string, salt, and parameters to argon2.IDKey to get hash byte array
+	hash := argon2.IDKey([]byte(password), salt, p.iterations, p.memory, p.parallelism, p.keyLength)
+
+	//encode the salt and hashed password
+	b64Salt := base64.RawStdEncoding.EncodeToString(salt)
+	b64Hash := base64.RawStdEncoding.EncodeToString(hash)
+	b64Salt = strings.ReplaceAll(b64Salt, "/", "_")
+	b64Salt = strings.ReplaceAll(b64Salt, "+", "-")
+	b64Salt = strings.ReplaceAll(b64Salt, "=", "")
+	b64Hash = strings.ReplaceAll(b64Hash, "/", "_")
+	b64Hash = strings.ReplaceAll(b64Hash, "+", "-")
+	b64Hash = strings.ReplaceAll(b64Hash, "=", "")
+
+	//construct the encoded hash in standard Argon2 format like $argon2id$v=19$m=65536,t=3,p=2$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG
+	//$argon2id is the variant being used
+	//$v=19 is the version
+	//$m=65536,t=3,p=2 represent the memory (m), iterations (t), and parallelism (p) parameters being used
+	//$c29tZXNhbHQ is the base64-encoded salt, without padding
+	//$RdescudvJCsgt3ub+b+dWRWJTmaaJObG is the base64-encoded hashed password, without padding
+	encodedHash = fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, p.memory, p.iterations, p.parallelism, b64Salt, b64Hash)
+
+	//use https://www.alexedwards.net/blog/how-to-hash-and-verify-passwords-with-argon2-in-go to verify hashs
+
+	return encodedHash, nil
+}
+
+func generateRandomBytes(n uint32) ([]byte, error) {
+	//create a byte array of the desired length
+	b := make([]byte, n)
+	//fill the array with random bytes
+	_, err := rand.Read(b)
+	//handle the errors
+	if err != nil {
+		return nil, err
+	}
+
+	return b, nil
+}
+
+// called when a page is gotten, displaying the page for the user
 func kidJWK(w http.ResponseWriter, r *http.Request) {
 	//get the url that the user entered as a string
 	u, _ := url.Parse(r.URL.String())
@@ -178,36 +303,6 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 	defer row.Close()
-
-	/*for row.Next() { // Iterate and fetch the records from result cursor
-		var kid int64
-		var key string
-		var exp int64
-		row.Scan(&kid, &key, &exp)
-
-		//check whether the key is expired
-		if exp <= time.Now().Unix() {
-			fmt.Println("Expired")
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-			return
-		} else {
-			//set the header to JSON so it knows what is being returned
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-
-			//assemble the data from the identified key
-			jsonJWK := fmt.Sprintf("{\"Kid\":\"%d\", \"Exp\": \"%d\"}", kid, exp)
-			//prettify the JSON before printing it
-			prettyJSON, err := prettyprint([]byte(jsonJWK))
-			if err != nil {
-				fmt.Println("Prettify error in kidJWK")
-				fmt.Println(err.Error())
-				return
-			}
-			prettyJSONStr := string(prettyJSON)
-			fmt.Fprintf(w, "%s\n", prettyJSONStr)
-		}
-	}*/
 
 	// Iterate and fetch the records from result cursor
 	for row.Next() {
@@ -242,7 +337,7 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 
 				//set the header to JSON so it knows what is being returned
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusCreated)
+				w.WriteHeader(http.StatusOK)
 
 				//assemble the data from the retrieved key
 				jsonJWK := fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"}", kid, modulusBytes, privateExponentBytes, exp)
@@ -259,7 +354,7 @@ func kidJWK(w http.ResponseWriter, r *http.Request) {
 			} else if strings.Contains(key, "-----BEGIN RSA PUBLIC KEY-----") {
 				//set the header to JSON so it knows what is being returned
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusCreated)
+				w.WriteHeader(http.StatusOK)
 
 				key = strings.ReplaceAll(key, "\n", "")
 
