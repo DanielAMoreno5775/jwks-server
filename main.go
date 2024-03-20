@@ -50,10 +50,11 @@ func mainActual(w io.Writer, h http.HandlerFunc, timeServed int64) {
 }
 
 func startHttpServer(wg *sync.WaitGroup, h http.HandlerFunc) *http.Server {
-	srv := &http.Server{Addr: port}
-
 	//calls the handler function
-	http.HandleFunc("/", h)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", h)
+
+	srv := &http.Server{Addr: port, Handler: limit(mux)}
 
 	go func() {
 		// let main know clean up is finished

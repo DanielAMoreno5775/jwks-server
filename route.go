@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/time/rate"
 )
 
 // create global variables to store the RSA key modulus and exponent
@@ -72,6 +73,21 @@ type params struct {
 	parallelism uint8
 	saltLength  uint32 //units in bytes, docs recommend 16
 	keyLength   uint32 //units in bytes, AES needs 32
+}
+
+// define the rate limiter to permit a maximum burst size of 10
+var limiter = rate.NewLimiter(1, 10)
+
+// function to return 429 status code if too many requests are made based on token buckets
+func limit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if limiter.Allow() == false {
+			http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func Serve(w http.ResponseWriter, r *http.Request) {
@@ -377,6 +393,7 @@ func prettyprint(b []byte) ([]byte, error) {
 }
 
 // called when a page is gotten, displaying the page for the user
+// rate limiting:https://www.alexedwards.net/blog/how-to-rate-limit-http-requests
 func auth(w http.ResponseWriter, r *http.Request) {
 	//declare a new userRegDetails struct
 	var authenticationDetails userAuthRequest
