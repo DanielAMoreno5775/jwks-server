@@ -1,4 +1,4 @@
-# Project 2: Extending the JWKS Server
+# Project 3: Bulking up Our JWKS Server
 
 ## Running the Server
 Open a terminal window in the root directory. Then, enter the following command. The server will remain open for 100 hours or until the user exits it via something like a Keyboard Interrupt.
