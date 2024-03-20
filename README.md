@@ -44,3 +44,4 @@ If you ran `go run main.go route.go` but never got the response of `Server liste
 ![Coverage of Custom Test Suite](./Custom-Test-Suite-Screenshot.png)
 ![Rubric Result of Gradebot Project 1](./Gradebot-Screenshot-Project1.png)
 ![Rubric Result of Gradebot Project 2](./Gradebot-Screenshot-Project2.png)
+![Rubric Result of Gradebot Project 3](./Gradebot-Screenshot-Project3.png)

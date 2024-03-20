@@ -75,13 +75,14 @@ type params struct {
 	keyLength   uint32 //units in bytes, AES needs 32
 }
 
-// define the rate limiter to permit a maximum burst size of 10
+// define the token bucket rate limiter to permit a maximum burst size of 10
 var limiter = rate.NewLimiter(1, 10)
 
 // function to return 429 status code if too many requests are made based on token buckets
 func limit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if limiter.Allow() == false {
+		//if limiter.Allow() as defined by the above variable returns a false, print a 429 status code and return without serving
+		if !limiter.Allow() {
 			http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
 			return
 		}
@@ -90,6 +91,7 @@ func limit(next http.Handler) http.Handler {
 	})
 }
 
+// function to serve up the allowed pages based on regex matching or return a 405 status code
 func Serve(w http.ResponseWriter, r *http.Request) {
 	var h http.Handler
 
@@ -259,6 +261,16 @@ func register(w http.ResponseWriter, r *http.Request) {
 	statement.Exec(registrationDetails.Username, hash, registrationDetails.Email, "2024-01-01 17:51:31")
 }
 
+/*
+	hash the passed password string based on the params structure and the Argon2 standard
+	standard Argon2 format would be $argon2id$v=19$m=65536,t=3,p=2$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG
+	$argon2id is the variant being used
+	$v=19 is the version
+	$m=65536,t=3,p=2 represent the memory (m), iterations (t), and parallelism (p) parameters being used
+	$c29tZXNhbHQ is the base64-encoded salt, without padding
+
+/ $RdescudvJCsgt3ub+b+dWRWJTmaaJObG is the base64-encoded hashed password, without padding
+*/
 func hashPassword(password string, p *params) (encodedHash string, err error) {
 	// Generate a cryptographically secure random salt using random bytes
 	salt, err := generateRandomBytes(p.saltLength)
@@ -280,14 +292,7 @@ func hashPassword(password string, p *params) (encodedHash string, err error) {
 	b64Hash = strings.ReplaceAll(b64Hash, "=", "")
 
 	//construct the encoded hash in standard Argon2 format like $argon2id$v=19$m=65536,t=3,p=2$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG
-	//$argon2id is the variant being used
-	//$v=19 is the version
-	//$m=65536,t=3,p=2 represent the memory (m), iterations (t), and parallelism (p) parameters being used
-	//$c29tZXNhbHQ is the base64-encoded salt, without padding
-	//$RdescudvJCsgt3ub+b+dWRWJTmaaJObG is the base64-encoded hashed password, without padding
 	encodedHash = fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, p.memory, p.iterations, p.parallelism, b64Salt, b64Hash)
-
-	//use https://www.alexedwards.net/blog/how-to-hash-and-verify-passwords-with-argon2-in-go to verify hashs
 
 	return encodedHash, nil
 }
@@ -393,7 +398,6 @@ func prettyprint(b []byte) ([]byte, error) {
 }
 
 // called when a page is gotten, displaying the page for the user
-// rate limiting:https://www.alexedwards.net/blog/how-to-rate-limit-http-requests
 func auth(w http.ResponseWriter, r *http.Request) {
 	//declare a new userRegDetails struct
 	var authenticationDetails userAuthRequest
@@ -553,29 +557,6 @@ func jwksPage(w http.ResponseWriter, r *http.Request) {
 			//assemble the data from the retrieved key
 			jsonJWK += fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"},", kid, modulusBytes, privateExponentBytes, exp)
 		}
-
-		/*if strings.Contains(key, "-----BEGIN RSA PRIVATE KEY-----") {
-			//parse the key to get rsa.PrivateKey
-			parsedPrivateKey, _ := ParseRsaPrivateKeyFromPemStr(key)
-
-			//extract the modulus bytes (n)
-			modulusBytes = base64.StdEncoding.EncodeToString(parsedPrivateKey.N.Bytes())
-			modulusBytes = strings.ReplaceAll(modulusBytes, "/", "_")
-			modulusBytes = strings.ReplaceAll(modulusBytes, "+", "-")
-			modulusBytes = strings.ReplaceAll(modulusBytes, "=", "")
-			if (len(modulusBytes) % 2) != 0 {
-				modulusBytes = "A" + modulusBytes
-			}
-
-			//set the exponent bytes
-			privateExponentBytes = "AQAB"
-
-			//if the key is not expired, append it to the JSON string
-			if exp > time.Now().Unix() {
-				//assemble the data from the retrieved key
-				jsonJWK += fmt.Sprintf("{\"kid\":\"%d\", \"alg\": \"RS256\", \"kty\": \"RSA\", \"use\": \"sig\", \"n\":\"%s\", \"e\":\"%s\", \"exp\":\"%d\"},", kid, modulusBytes, privateExponentBytes, exp)
-			}
-		}*/
 	}
 
 	//handle trailing commas and close up the JSON

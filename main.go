@@ -50,10 +50,11 @@ func mainActual(w io.Writer, h http.HandlerFunc, timeServed int64) {
 }
 
 func startHttpServer(wg *sync.WaitGroup, h http.HandlerFunc) *http.Server {
-	//calls the handler function
+	//create servemux (or router) to store a mapping between predefined URL paths for app and handlers
 	mux := http.NewServeMux()
+	//calls the handler function on the servemux
 	mux.HandleFunc("/", h)
-
+	//add the defined global constant port variable and the returned value from limit() to the server structure
 	srv := &http.Server{Addr: port, Handler: limit(mux)}
 
 	go func() {
