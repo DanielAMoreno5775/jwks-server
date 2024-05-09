@@ -11,8 +11,6 @@ set CGO_ENABLED=1
 go run main.go route.go
 ```
 
-Accessing a specific kid can be done with the following URL, if it is not expired: http://localhost:8080/.well-known/164.json
-
 ## Capabilities
 
 This program will serve up a web server on port 8080.
@@ -20,6 +18,7 @@ This program will serve up a web server on port 8080.
  * On a POST request, the /register page will accept a username and email from a JSON payload, and it returns a password which is a random UUID. In addition, this will save the following details in the database: username, email, date registered, and salted Argon2 hash of the password.
  * On a POST request which has passed a JSON payload containing the username and password, the /auth page will return an unexpired JWT signed by a private RSA key. If the expired query parameter is passed, the signed JWT will be expired. The associated private key will be stored in the SQLite database, encoded in PKCS1 PEM format and encrypted with AES-256 GCM. In addition, this creates a log entry in the database which tracks the request IP address, timestamp, and user ID. The /auth page is also protected by a rate limiter which returns a 429 error code if more than 10 requests are made per second.
  * On a GET request, the /jwks page will return a JWKS for the private keys in the database. All SQL actions are parameterized to prevent injection. I used a custom test suite and a test suite provided as part of the assignment.
+ * On a GET request, the /.well-known/#.json page will return the JWK for a specific, non-expired key in the database. Accessing a specific kid can be done with the following URL: http://localhost:8080/.well-known/164.json.
 
 ## Test Suite
 Open a terminal window in the root directory. Then, enter the following commands in the following order.
